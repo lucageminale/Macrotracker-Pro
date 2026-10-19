@@ -7,11 +7,23 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// --- CONFIGURAZIONE FIREBASE SICURA (ANTI-CRASH) ---
+let app, auth, db;
+let isFirebaseEnabled = false;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'macrotracker-local';
+
+try {
+  const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+  // Inizializza Firebase SOLO se ci sono le chiavi, altrimenti passa in modalità Locale/Offline
+  if (Object.keys(firebaseConfig).length > 0) {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    isFirebaseEnabled = true;
+  }
+} catch (e) {
+  console.warn("Firebase non configurato, modalità offline locale attivata.");
+}
 
 const basicFoodsDB = [
   { name: "Philadelphia proteica", calories: 87, protein: 11.0, carbs: 4.9, fat: 2.5, hasPieces: true, pieceWeight: 175 },
@@ -138,7 +150,12 @@ export default function MacroTracker() {
     }
   };
 
+  // 1. GESTIONE AUTENTICAZIONE SICURA
   useEffect(() => {
+    if (!isFirebaseEnabled) {
+       setUser({ uid: 'local-offline-user' });
+       return;
+    }
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
@@ -150,8 +167,13 @@ export default function MacroTracker() {
     return () => unsubscribe();
   }, []);
 
+  // 2. GESTIONE CARICAMENTO DATI SICURA
   useEffect(() => {
     if (!user) return;
+    if (!isFirebaseEnabled || user.uid === 'local-offline-user') {
+        setSyncStatus('synced');
+        return;
+    }
     const loadData = async () => {
       setSyncStatus('loading');
       try {
@@ -181,12 +203,21 @@ export default function MacroTracker() {
     loadData();
   }, [user]);
 
+  // 3. GESTIONE SALVATAGGIO DATI SICURA
   useEffect(() => {
     if (!user || syncStatus === 'loading') return;
     setSyncStatus('saving');
+    
+    // Salvataggio infallibile su LocalStorage (Telefono)
     const dataToSave = { diary, customFoods, customRecipes, customMeals, recentFoods, activeCalMap, waterMap, weightMap, profile };
     Object.keys(dataToSave).forEach(key => localStorage.setItem(`mt_${key}`, JSON.stringify(dataToSave[key])));
 
+    if (!isFirebaseEnabled || user.uid === 'local-offline-user') {
+       setTimeout(() => setSyncStatus('synced'), 500); // Finto feedback visivo di salvataggio per l'utente offline
+       return;
+    }
+
+    // Salvataggio su Cloud se abilitato
     const timer = setTimeout(async () => {
       try {
         const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'user_data', 'macrotracker_v3');
@@ -497,7 +528,7 @@ export default function MacroTracker() {
 
       <main className="p-4 max-w-3xl mx-auto space-y-6">
         
-        {}
+        {/* TAB DIARIO */}
         {activeTab === 'diario' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             
@@ -668,7 +699,7 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {}
+        {/* TAB STORICO */}
         {activeTab === 'storico' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm flex items-center justify-between">
@@ -720,7 +751,7 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {}
+        {/* TAB PROFILO */}
         {activeTab === 'profilo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
@@ -829,7 +860,7 @@ export default function MacroTracker() {
             </div>
             
             <div className="bg-white p-6 rounded-3xl border shadow-sm">
-              <h3 className="font-black text-lg text-slate-800 mb-1">Backup Locale e Cloud</h3>
+              <h3 className="font-black text-lg text-slate-800 mb-1">Backup Locale</h3>
               <p className="text-sm text-slate-500 mb-4">Esporta un salvataggio o ripristina i dati.</p>
               <div className="grid grid-cols-2 gap-4">
                 <button onClick={() => {
@@ -862,7 +893,7 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {}
+        {/* TAB IDRATAZIONE */}
         {activeTab === 'idratazione' && (
           <div className="space-y-6 animate-in fade-in duration-300">
              <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-6">
@@ -888,7 +919,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {}
+        {/* TAB CATALOGO */}
         {activeTab === 'catalogo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="space-y-3">
@@ -944,7 +975,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {}
+        {/* TAB CREA CIBO */}
         {activeTab === 'crea_cibo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
@@ -996,7 +1027,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {}
+        {/* TAB PASTI */}
         {activeTab === 'pasti' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
@@ -1101,7 +1132,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {}
+        {/* TAB RICETTE */}
         {activeTab === 'ricette' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm">
@@ -1222,7 +1253,7 @@ export default function MacroTracker() {
 
       </main>
 
-      {}
+      {/* MODALE MEAL BUILDER (SAFE) */}
       {isMealModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-md space-y-5 shadow-2xl">
