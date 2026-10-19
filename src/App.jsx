@@ -7,14 +7,12 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 
-// --- CONFIGURAZIONE FIREBASE ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-// --- DATABASE LOCALE HARDCODED ---
 const basicFoodsDB = [
   { name: "Philadelphia proteica", calories: 87, protein: 11.0, carbs: 4.9, fat: 2.5, hasPieces: true, pieceWeight: 175 },
   { name: "Philadelphia protein", calories: 87, protein: 11.0, carbs: 4.9, fat: 2.5, hasPieces: true, pieceWeight: 175 },
@@ -72,7 +70,6 @@ export default function MacroTracker() {
   const [syncStatus, setSyncStatus] = useState('loading');
   const [toastMessage, setToastMessage] = useState('');
 
-  // --- STATO OFFLINE-FIRST ---
   const loadLocal = (key, fallback) => {
     try { const item = localStorage.getItem(`mt_${key}`); return item ? JSON.parse(item) : fallback; } 
     catch(e) { return fallback; }
@@ -92,7 +89,6 @@ export default function MacroTracker() {
     goalMode: 'manual', smartGoal: 'recomp', jobActivity: 1.1, workoutActivity: 0.2
   }));
 
-  // Stati UI
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -1260,3 +1256,16 @@ export default function MacroTracker() {
                    </div>
                 </>
              )}
+             <button onClick={() => { setIsMealModalOpen(false); setMealModalName(''); setMealModalSelectedExisting(''); }} className="w-full mt-2 bg-white border border-slate-200 text-slate-700 py-3.5 rounded-xl font-bold shadow-sm hover:bg-slate-50 active:scale-95 transition-all">Annulla</button>
+          </div>
+        </div>
+      )}
+
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white px-6 py-3 rounded-full font-bold shadow-2xl z-[200] animate-in slide-in-from-bottom-5">
+          {toastMessage}
+        </div>
+      )}
+    </div>
+  );
+}
