@@ -1,0 +1,15 @@
+{
+  "short_name": "MacroPro",
+  "name": "MacroTracker Pro",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1146/1146296.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#f8fafc"
+}
