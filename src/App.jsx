@@ -7,31 +7,27 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 
-// --- CONFIGURAZIONE FIREBASE SICURA (ANTI-CRASH) ---
-let app, auth, db;
-let isFirebaseEnabled = false;
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'macrotracker-local';
-
-try {
-  const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-  // Inizializza Firebase SOLO se ci sono le chiavi, altrimenti passa in modalità Locale/Offline
-  if (Object.keys(firebaseConfig).length > 0) {
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-    isFirebaseEnabled = true;
-  }
-} catch (e) {
-  console.warn("Firebase non configurato, modalità offline locale attivata.");
-}
+// --- CONFIGURAZIONE FIREBASE ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 const basicFoodsDB = [
+  // Ingredienti Poké
+  { name: "Riso bianco cotto (Sushi)", calories: 130, protein: 2.7, carbs: 28.0, fat: 0.3 },
+  { name: "Riso nero cotto", calories: 140, protein: 3.0, carbs: 30.0, fat: 1.0 },
+  { name: "Salmone crudo", calories: 208, protein: 20.0, carbs: 0.0, fat: 13.0 },
+  { name: "Avocado", calories: 160, protein: 2.0, carbs: 8.5, fat: 14.7 },
+  { name: "Philadelphia classica", calories: 255, protein: 4.5, carbs: 3.0, fat: 25.0 },
+  { name: "Edamame sgusciati", calories: 122, protein: 11.0, carbs: 10.0, fat: 5.0 },
+  { name: "Salsa agrodolce piccante", calories: 190, protein: 0.5, carbs: 45.0, fat: 0.2 },
+  { name: "Salsa di soia", calories: 53, protein: 8.0, carbs: 5.0, fat: 0.0 },
+  // Alimenti Base
   { name: "Philadelphia proteica", calories: 87, protein: 11.0, carbs: 4.9, fat: 2.5, hasPieces: true, pieceWeight: 175 },
-  { name: "Philadelphia protein", calories: 87, protein: 11.0, carbs: 4.9, fat: 2.5, hasPieces: true, pieceWeight: 175 },
   { name: "Yogurt greco 0%", calories: 57, protein: 10.0, carbs: 4.0, fat: 0.0 },
   { name: "Albume d'uovo", calories: 52, protein: 11.0, carbs: 0.7, fat: 0.2 },
-  { name: "Albume", calories: 52, protein: 11.0, carbs: 0.7, fat: 0.2 },
-  { name: "Olio di semi", calories: 884, protein: 0.0, carbs: 0.0, fat: 100.0 },
   { name: "Olio di oliva", calories: 884, protein: 0.0, carbs: 0.0, fat: 100.0 },
   { name: "Pomodori", calories: 19, protein: 0.9, carbs: 3.9, fat: 0.2 },
   { name: "Patate", calories: 77, protein: 2.0, carbs: 17.0, fat: 0.1 },
@@ -54,16 +50,15 @@ const basicFoodsDB = [
   { name: "Maionese light", calories: 231, protein: 0.5, carbs: 16.0, fat: 19.2 },
   { name: "Stracciatella", calories: 240, protein: 9.1, carbs: 1.4, fat: 22.0 },
   { name: "Zucchero", calories: 387, protein: 0, carbs: 100, fat: 0 },
-  { name: "Zucchero di canna", calories: 380, protein: 0, carbs: 98, fat: 0 },
   { name: "Farina 00", calories: 340, protein: 10, carbs: 70, fat: 1 },
   { name: "Farina Manitoba", calories: 341, protein: 14, carbs: 68, fat: 1 },
   { name: "Farina Caputo pizzeria", calories: 352, protein: 13, carbs: 70, fat: 1.5 },
-  { name: "Farina Caputo nuvola", calories: 352, protein: 12.5, carbs: 72, fat: 1 },
-  { name: "Pelati San Marzano dell’agronocerino sarnese (marca coop)", calories: 22, protein: 1.2, carbs: 3.5, fat: 0.1 },
-  { name: "Mozzarella fior di latte masaniello", calories: 235, protein: 17, carbs: 1, fat: 18 },
-  { name: "Funghi porcini", calories: 120, protein: 3, carbs: 4, fat: 10 },
-  { name: "Salsiccia piccante a fette (tipo pepperoni pizza)", calories: 438, protein: 25, carbs: 1, fat: 37 },
-  { name: "Mortadella", calories: 288, protein: 15, carbs: 0, fat: 25 }
+  { name: "Burro", calories: 717, protein: 0.8, carbs: 0.1, fat: 81 },
+  { name: "Uova sgusciate", calories: 143, protein: 13, carbs: 0.7, fat: 9.5, pieceWeight: 55, hasPieces: true },
+  { name: "Latte intero", calories: 64, protein: 3.3, carbs: 5, fat: 3.6 },
+  { name: "Panna fresca liquida", calories: 337, protein: 2, carbs: 3, fat: 35 },
+  { name: "Lievito di birra secco", calories: 325, protein: 40, carbs: 41, fat: 4 },
+  { name: "Cannella in polvere", calories: 247, protein: 4, carbs: 80, fat: 1.2 }
 ].sort((a, b) => b.name.length - a.name.length);
 
 const generateId = (prefix) => {
@@ -82,6 +77,7 @@ export default function MacroTracker() {
   const [syncStatus, setSyncStatus] = useState('loading');
   const [toastMessage, setToastMessage] = useState('');
 
+  // --- STATO OFFLINE-FIRST ---
   const loadLocal = (key, fallback) => {
     try { const item = localStorage.getItem(`mt_${key}`); return item ? JSON.parse(item) : fallback; } 
     catch(e) { return fallback; }
@@ -101,12 +97,14 @@ export default function MacroTracker() {
     goalMode: 'manual', smartGoal: 'recomp', jobActivity: 1.1, workoutActivity: 0.2
   }));
 
+  // Stati UI
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [barcodeQuery, setBarcodeQuery] = useState('');
 
   const [newFood, setNewFood] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', isPackage: false, packageWeight: '', totalPieces: '' });
+  const [editingFoodId, setEditingFoodId] = useState(null); // Nuovo stato per editare cibo custom
 
   const [recipeText, setRecipeText] = useState('');
   const [extractedIngs, setExtractedIngs] = useState([]);
@@ -150,12 +148,7 @@ export default function MacroTracker() {
     }
   };
 
-  // 1. GESTIONE AUTENTICAZIONE SICURA
   useEffect(() => {
-    if (!isFirebaseEnabled) {
-       setUser({ uid: 'local-offline-user' });
-       return;
-    }
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
@@ -167,13 +160,8 @@ export default function MacroTracker() {
     return () => unsubscribe();
   }, []);
 
-  // 2. GESTIONE CARICAMENTO DATI SICURA
   useEffect(() => {
     if (!user) return;
-    if (!isFirebaseEnabled || user.uid === 'local-offline-user') {
-        setSyncStatus('synced');
-        return;
-    }
     const loadData = async () => {
       setSyncStatus('loading');
       try {
@@ -203,21 +191,12 @@ export default function MacroTracker() {
     loadData();
   }, [user]);
 
-  // 3. GESTIONE SALVATAGGIO DATI SICURA
   useEffect(() => {
     if (!user || syncStatus === 'loading') return;
     setSyncStatus('saving');
-    
-    // Salvataggio infallibile su LocalStorage (Telefono)
     const dataToSave = { diary, customFoods, customRecipes, customMeals, recentFoods, activeCalMap, waterMap, weightMap, profile };
     Object.keys(dataToSave).forEach(key => localStorage.setItem(`mt_${key}`, JSON.stringify(dataToSave[key])));
 
-    if (!isFirebaseEnabled || user.uid === 'local-offline-user') {
-       setTimeout(() => setSyncStatus('synced'), 500); // Finto feedback visivo di salvataggio per l'utente offline
-       return;
-    }
-
-    // Salvataggio su Cloud se abilitato
     const timer = setTimeout(async () => {
       try {
         const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'user_data', 'macrotracker_v3');
@@ -347,6 +326,29 @@ export default function MacroTracker() {
     setDiary(prev => [...(prev || []), newItem]);
     setRecentFoods(prev => [food, ...(prev || []).filter(f => f.name !== food.name)].slice(0, 20));
     showToast(`Aggiunto: ${food.name}`);
+  };
+
+  const addMealToDiary = (meal) => {
+    // Inject all items of the meal directly into the diary seamlessly
+    const newItems = (meal.items || []).map((item, idx) => {
+        const qty = parseFloat(item.displayQty) || 100;
+        let factor = qty / 100;
+        if (item.unit === 'pz') factor = ((item.pieceWeight || 100) * qty) / 100;
+
+        return {
+            ...item,
+            diaryId: generateId(`meal_item_${idx}`),
+            date: selectedDate,
+            displayQty: qty,
+            unit: item.unit || 'g',
+            calories: Math.round((item.baseCalories || item.calories || 0) * factor),
+            protein: parseFloat(((item.baseProtein || item.protein || 0) * factor).toFixed(1)),
+            carbs: parseFloat(((item.baseCarbs || item.carbs || 0) * factor).toFixed(1)),
+            fat: parseFloat(((item.baseFat || item.fat || 0) * factor).toFixed(1))
+        };
+    });
+    setDiary(prev => [...(prev || []), ...newItems]);
+    showToast(`Pasto iniettato: ${meal.name}`);
   };
 
   const handleCreateMealFromSelection = () => {
@@ -528,14 +530,14 @@ export default function MacroTracker() {
 
       <main className="p-4 max-w-3xl mx-auto space-y-6">
         
-        {/* TAB DIARIO */}
+        {}
         {activeTab === 'diario' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             
             {showWeightReminder && (
                <div className="bg-amber-100 border border-amber-200 text-amber-800 p-4 rounded-2xl flex items-start shadow-sm">
                    <span className="text-xl mr-3">⚠️</span>
-                   <p className="text-sm font-bold">Sono passati più di 15 giorni dalla tua ultima pesata. Registra il tuo peso odierno (qui sotto o nel profilo) per mantenere i calcoli e gli obiettivi sempre precisi!</p>
+                   <p className="text-sm font-bold">Sono passati più di 15 giorni dalla tua ultima pesata. Registra il tuo peso odierno per mantenere i calcoli precisi!</p>
                </div>
             )}
 
@@ -699,7 +701,7 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {/* TAB STORICO */}
+        {}
         {activeTab === 'storico' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm flex items-center justify-between">
@@ -751,7 +753,6 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {/* TAB PROFILO */}
         {activeTab === 'profilo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
@@ -860,7 +861,7 @@ export default function MacroTracker() {
             </div>
             
             <div className="bg-white p-6 rounded-3xl border shadow-sm">
-              <h3 className="font-black text-lg text-slate-800 mb-1">Backup Locale</h3>
+              <h3 className="font-black text-lg text-slate-800 mb-1">Backup Locale e Cloud</h3>
               <p className="text-sm text-slate-500 mb-4">Esporta un salvataggio o ripristina i dati.</p>
               <div className="grid grid-cols-2 gap-4">
                 <button onClick={() => {
@@ -882,7 +883,9 @@ export default function MacroTracker() {
                       try {
                         const p = JSON.parse(ev.target.result);
                         if(p.diary) setDiary(p.diary); if(p.customFoods) setCustomFoods(p.customFoods); if(p.customRecipes) setCustomRecipes(p.customRecipes);
-                        if(p.customMeals) setCustomMeals(p.customMeals); if(p.profile) setProfile(p.profile); if(p.weightMap) setWeightMap(p.weightMap);
+                        if(p.customMeals) setCustomMeals(p.customMeals); if(p.profile) setProfile(p.profile); 
+                        if(p.weightMap) setWeightMap(p.weightMap); if(p.waterMap) setWaterMap(p.waterMap); 
+                        if(p.activeCalMap) setActiveCalMap(p.activeCalMap); if(p.recentFoods) setRecentFoods(p.recentFoods);
                         showToast("Ripristino completato!");
                       } catch(err) {}
                     }; r.readAsText(file);
@@ -893,7 +896,7 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {/* TAB IDRATAZIONE */}
+        {}
         {activeTab === 'idratazione' && (
           <div className="space-y-6 animate-in fade-in duration-300">
              <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-6">
@@ -919,7 +922,6 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {/* TAB CATALOGO */}
         {activeTab === 'catalogo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="space-y-3">
@@ -975,11 +977,11 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {/* TAB CREA CIBO */}
+        {}
         {activeTab === 'crea_cibo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
-              <h2 className="font-black text-xl text-slate-800">Crea Nuovo Cibo</h2>
+              <h2 className="font-black text-xl text-slate-800">{editingFoodId ? 'Modifica Cibo' : 'Crea Nuovo Cibo'}</h2>
               <input type="text" placeholder="Nome Alimento" value={newFood.name} onChange={e => setNewFood({ ...newFood, name: e.target.value })} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold shadow-sm" />
               <div className="grid grid-cols-2 gap-4">
                 <input type="number" placeholder="Kcal per 100g" value={newFood.calories !== undefined ? newFood.calories : ''} onChange={e => setNewFood({ ...newFood, calories: e.target.value })} className="bg-slate-50 border p-3 rounded-xl outline-none shadow-sm" />
@@ -994,45 +996,76 @@ export default function MacroTracker() {
                 </label>
                 {newFood.isPackage && (
                   <div className="flex space-x-4 mt-3">
-                    <input type="number" placeholder="Peso Totale (g)" value={newFood.packageWeight} onChange={e => setNewFood({ ...newFood, packageWeight: e.target.value })} className="w-1/2 p-2 rounded-lg border outline-none font-medium shadow-sm" />
-                    <input type="number" placeholder="Num. Pezzi" value={newFood.totalPieces} onChange={e => setNewFood({ ...newFood, totalPieces: e.target.value })} className="w-1/2 p-2 rounded-lg border outline-none font-medium shadow-sm" />
+                    <input type="number" placeholder="Peso Pezzo (g)" value={newFood.packageWeight} onChange={e => setNewFood({ ...newFood, packageWeight: e.target.value })} className="w-full p-2 rounded-lg border outline-none font-medium shadow-sm" />
                   </div>
                 )}
               </div>
-              <button onClick={() => {
-                  if (!newFood.name || !newFood.calories) return showToast("Nome e Calorie obbligatori");
-                  let pieceWeight = 0; if (newFood.isPackage) { const w = parseFloat(newFood.packageWeight) || 0; const p = parseFloat(newFood.totalPieces) || 0; if (w > 0 && p > 0) pieceWeight = Math.round(w / p); }
-                  setCustomFoods(prev => [...(prev || []), { id: generateId('custom_food'), name: newFood.name, calories: parseFloat(newFood.calories) || 0, protein: parseFloat(newFood.protein) || 0, carbs: parseFloat(newFood.carbs) || 0, fat: parseFloat(newFood.fat) || 0, hasPieces: newFood.isPackage, pieceWeight: pieceWeight, isCustom: true }]);
-                  setNewFood({ name: '', calories: '', protein: '', carbs: '', fat: '', isPackage: false, packageWeight: '', totalPieces: '' }); showToast("Cibo Creato!");
-              }} className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-md hover:shadow-lg active:scale-95 transition-all">💾 Salva Alimento</button>
+              <div className="flex space-x-2">
+                 <button onClick={() => {
+                     if (!newFood.name || !newFood.calories) return showToast("Nome e Calorie obbligatori");
+                     let pieceWeight = 0; if (newFood.isPackage) pieceWeight = parseFloat(newFood.packageWeight) || 100;
+                     
+                     const foodData = { id: editingFoodId || generateId('custom_food'), name: newFood.name, calories: parseFloat(newFood.calories) || 0, protein: parseFloat(newFood.protein) || 0, carbs: parseFloat(newFood.carbs) || 0, fat: parseFloat(newFood.fat) || 0, hasPieces: newFood.isPackage, pieceWeight: pieceWeight, isCustom: true };
+                     
+                     if (editingFoodId) { 
+                         setCustomFoods(prev => (prev || []).map(f => f.id === editingFoodId ? foodData : f)); 
+                         setEditingFoodId(null); 
+                     } else { 
+                         setCustomFoods(prev => [...(prev || []), foodData]); 
+                     }
+                     
+                     // Aggiornamento a cascata sui pasti usuali
+                     setCustomMeals(prev => (prev || []).map(m => {
+                         let changed = false;
+                         const newItems = m.items.map(it => {
+                             if (it.name.toLowerCase() === foodData.name.toLowerCase()) { changed = true; return { ...it, name: foodData.name, baseCalories: foodData.calories, baseProtein: foodData.protein, baseCarbs: foodData.carbs, baseFat: foodData.fat, hasPieces: foodData.hasPieces, pieceWeight: foodData.pieceWeight }; }
+                             return it;
+                         });
+                         return changed ? { ...m, items: newItems } : m;
+                     }));
+                     
+                     setNewFood({ name: '', calories: '', protein: '', carbs: '', fat: '', isPackage: false, packageWeight: '', totalPieces: '' }); showToast(editingFoodId ? "Cibo Aggiornato!" : "Cibo Creato!");
+                 }} className="flex-1 bg-gradient-to-r from-indigo-600 to-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-md hover:shadow-lg active:scale-95 transition-all">{editingFoodId ? '💾 Aggiorna Alimento' : '💾 Salva Alimento'}</button>
+                 {editingFoodId && <button onClick={() => { setEditingFoodId(null); setNewFood({ name: '', calories: '', protein: '', carbs: '', fat: '', isPackage: false, packageWeight: '', totalPieces: '' }); }} className="px-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-all">Annulla</button>}
+              </div>
             </div>
+
             {customFoods.length > 0 && (
               <div className="space-y-3">
                 <h3 className="font-bold text-lg">I Tuoi Alimenti Creati</h3>
-                {customFoods.map(food => (
+                {customFoods.map(food => {
+                  const cals = food.hasPieces ? Math.round((food.calories * food.pieceWeight) / 100) : food.calories;
+                  const p = food.hasPieces ? ((food.protein * food.pieceWeight) / 100).toFixed(1) : food.protein;
+                  const c = food.hasPieces ? ((food.carbs * food.pieceWeight) / 100).toFixed(1) : food.carbs;
+                  const f = food.hasPieces ? ((food.fat * food.pieceWeight) / 100).toFixed(1) : food.fat;
+                  
+                  return (
                   <div key={food.id} className="bg-white border p-4 rounded-2xl shadow-sm flex flex-col md:flex-row md:justify-between md:items-center space-y-3 md:space-y-0">
                     <div>
-                      <p className="font-bold text-slate-800">{food.name}</p>
-                      <p className="text-sm text-slate-500">{food.calories} kcal/100g {food.hasPieces ? `• ${food.pieceWeight}g/pz` : ''}</p>
+                      <p className="font-bold text-slate-800 text-lg">{food.name}</p>
+                      <p className="text-sm text-slate-500">{cals} kcal {food.hasPieces ? `(P: ${p} C: ${c} G: ${f}) per pezzo da ${food.pieceWeight}g` : `(P: ${p} C: ${c} G: ${f}) su 100g`}</p>
                     </div>
                     <div className="flex space-x-2 items-center">
                       <button onClick={() => addFoodToDiary(food, 100, 'g')} className="flex-1 bg-white border border-indigo-200 text-indigo-700 px-3 py-2 rounded-xl font-bold text-sm shadow-sm hover:bg-indigo-50 hover:border-indigo-300 active:scale-95 transition-all">+ 100g</button>
                       {food.hasPieces && <button onClick={() => addFoodToDiary(food, 1, 'pz')} className="flex-1 bg-gradient-to-r from-indigo-600 to-indigo-500 text-white px-3 py-2 rounded-xl font-bold text-sm shadow-sm hover:shadow-md active:scale-95 transition-all">+ 1 pz</button>}
-                      <button onClick={() => setCustomFoods(p => p.filter(f => f.id !== food.id))} className="p-2 text-rose-400 bg-rose-50 rounded-xl hover:bg-rose-100 active:scale-95 transition-transform"><Trash2 size={18}/></button>
+                      <div className="flex space-x-1 ml-2">
+                        <button onClick={() => { setEditingFoodId(food.id); setNewFood({ name: food.name, calories: food.calories, protein: food.protein, carbs: food.carbs, fat: food.fat, isPackage: food.hasPieces, packageWeight: food.hasPieces ? food.pieceWeight : '', totalPieces: food.hasPieces ? 1 : '' }); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="p-2 text-indigo-600 bg-indigo-50 rounded-xl hover:bg-indigo-100 active:scale-95 transition-transform"><Edit2 size={18}/></button>
+                        <button onClick={() => setCustomFoods(pr => pr.filter(x => x.id !== food.id))} className="p-2 text-rose-400 bg-rose-50 rounded-xl hover:bg-rose-100 active:scale-95 transition-transform"><Trash2 size={18}/></button>
+                      </div>
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>
         )}
         
-        {/* TAB PASTI */}
+        {}
         {activeTab === 'pasti' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
               <h2 className="font-black text-xl text-slate-800">{editingMealId ? 'Modifica Pasto' : 'Crea Pasto Usuale'}</h2>
-              <input type="text" placeholder="Nome del Pasto (es. Colazione)" value={mealBuilder.name} onChange={e => setMealBuilder({ ...mealBuilder, name: e.target.value })} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold text-slate-700 shadow-sm" />
+              <input type="text" placeholder="Nome del Pasto (es. Poké Grande)" value={mealBuilder.name} onChange={e => setMealBuilder({ ...mealBuilder, name: e.target.value })} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold text-slate-700 shadow-sm" />
               
               <div className="space-y-3 mt-4">
                 {mealBuilder.items.map((item, idx) => (
@@ -1114,15 +1147,21 @@ export default function MacroTracker() {
                     const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100;
                     return sum + Math.round((item.baseCalories || 0) * f);
                   }, 0);
+                  const mPro = meal.items.reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseProtein || 0) * f); }, 0);
+                  const mCar = meal.items.reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseCarbs || 0) * f); }, 0);
+                  const mFat = meal.items.reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseFat || 0) * f); }, 0);
+
                   return (
                   <div key={meal.id} className="bg-white p-4 rounded-3xl border shadow-sm">
-                    <div className="flex justify-between items-center mb-3">
-                      <p className="font-bold text-lg text-slate-800">{meal.name} <span className="text-indigo-600 text-base font-black tracking-tight">({mCals} kcal)</span></p>
+                    <div className="flex justify-between items-center mb-1">
+                      <p className="font-bold text-lg text-slate-800">{meal.name}</p>
                       <div className="flex space-x-1">
-                        <button onClick={() => { setEditingMealId(meal.id); setMealBuilder(meal); }} className="text-slate-400 hover:text-indigo-600 p-2 bg-slate-50 rounded-xl active:scale-95 transition-transform"><Edit2 size={18}/></button>
+                        <button onClick={() => { setEditingMealId(meal.id); setMealBuilder(meal); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="text-slate-400 hover:text-indigo-600 p-2 bg-slate-50 rounded-xl active:scale-95 transition-transform"><Edit2 size={18}/></button>
                         <button onClick={() => setCustomMeals(p => p.filter(m => m.id !== meal.id))} className="text-rose-400 p-2 bg-rose-50 rounded-xl hover:bg-rose-100 active:scale-95 transition-transform"><Trash2 size={18}/></button>
                       </div>
                     </div>
+                    <p className="text-sm font-bold text-indigo-600 mb-3">{mCals} kcal <span className="text-xs font-medium text-slate-500">(P: {mPro.toFixed(1)} C: {mCar.toFixed(1)} G: {mFat.toFixed(1)})</span></p>
+
                     <div className="space-y-1 mb-4 bg-slate-50 p-3 rounded-xl border border-slate-100">{meal.items.map((item, idx) => <p key={idx} className="text-sm text-slate-600 font-medium">• {item.displayQty}{item.unit} {item.name}</p>)}</div>
                     <button onClick={() => addMealToDiary(meal)} className="w-full bg-white border border-indigo-200 text-indigo-700 py-3 rounded-xl font-bold shadow-sm hover:border-indigo-300 hover:bg-indigo-50 active:scale-95 transition-all">Inietta Intero Pasto nel Diario</button>
                   </div>
@@ -1132,7 +1171,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {/* TAB RICETTE */}
+        {}
         {activeTab === 'ricette' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm">
@@ -1219,7 +1258,24 @@ export default function MacroTracker() {
                       const safeYield = Number(recipeYield) || 1;
                       const pieceWeight = Math.round(totalGrams / safeYield);
                       const recipeData = { id: editingRecipeId || generateId('recipe'), name: recipeName, yield: safeYield, calories: Math.round((tCals / totalGrams) * 100), protein: parseFloat(((tPro / totalGrams) * 100).toFixed(1)), carbs: parseFloat(((tCar / totalGrams) * 100).toFixed(1)), fat: parseFloat(((tFat / totalGrams) * 100).toFixed(1)), hasPieces: true, pieceWeight: pieceWeight, isRecipe: true, weightInGrams: totalGrams, ingredients: extractedIngs };
-                      if (editingRecipeId) { setCustomRecipes(prev => (prev || []).map(r => r.id === editingRecipeId ? recipeData : r)); setEditingRecipeId(null); } else { setCustomRecipes(prev => [...(prev || []), recipeData]); }
+                      
+                      if (editingRecipeId) { 
+                          setCustomRecipes(prev => (prev || []).map(r => r.id === editingRecipeId ? recipeData : r)); 
+                          setEditingRecipeId(null); 
+                      } else { 
+                          setCustomRecipes(prev => [...(prev || []), recipeData]); 
+                      }
+                      
+                      // Aggiornamento a cascata sui pasti usuali
+                      setCustomMeals(prev => (prev || []).map(m => {
+                          let changed = false;
+                          const newItems = m.items.map(it => {
+                              if (it.name.toLowerCase() === recipeData.name.toLowerCase()) { changed = true; return { ...it, name: recipeData.name, baseCalories: recipeData.calories, baseProtein: recipeData.protein, baseCarbs: recipeData.carbs, baseFat: recipeData.fat, hasPieces: recipeData.hasPieces, pieceWeight: recipeData.pieceWeight }; }
+                              return it;
+                          });
+                          return changed ? { ...m, items: newItems } : m;
+                      }));
+
                       setExtractedIngs([]); setRecipeName(''); setRecipeYield(1); showToast("Ricetta Salvata!");
                   }} className="flex-1 bg-gradient-to-r from-indigo-600 to-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-md hover:shadow-lg active:scale-95 transition-all">{editingRecipeId ? '💾 Aggiorna' : '💾 Salva'}</button>
                   {editingRecipeId && <button onClick={() => { setEditingRecipeId(null); setRecipeName(''); setRecipeYield(1); setExtractedIngs([]); }} className="px-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-all">Annulla</button>}
@@ -1230,22 +1286,31 @@ export default function MacroTracker() {
             {customRecipes.length > 0 && (
               <div className="space-y-4 pt-6 border-t border-slate-200">
                 <h3 className="font-bold text-lg">Le Tue Ricette</h3>
-                {customRecipes.map(r => (
+                {customRecipes.map(r => {
+                  const cals = r.hasPieces ? Math.round((r.calories * r.pieceWeight) / 100) : r.calories;
+                  const p = r.hasPieces ? ((r.protein * r.pieceWeight) / 100).toFixed(1) : r.protein;
+                  const c = r.hasPieces ? ((r.carbs * r.pieceWeight) / 100).toFixed(1) : r.carbs;
+                  const f = r.hasPieces ? ((r.fat * r.pieceWeight) / 100).toFixed(1) : r.fat;
+
+                  return (
                   <div key={r.id} className="bg-white border p-4 rounded-3xl shadow-sm space-y-3">
                     <div className="flex justify-between items-center">
-                      <div><p className="font-bold text-slate-800 text-lg">{r.name}</p><p className="text-sm text-slate-500">{r.calories} kcal/100g • {r.pieceWeight}g/pz</p></div>
+                      <div>
+                        <p className="font-bold text-slate-800 text-lg">{r.name}</p>
+                        <p className="text-sm text-slate-500">{cals} kcal {r.hasPieces ? `(P: ${p} C: ${c} G: ${f}) per pezzo da ${r.pieceWeight}g` : `(P: ${p} C: ${c} G: ${f}) su 100g`}</p>
+                      </div>
                       <div className="flex space-x-1">
                         <button onClick={() => {
                            setEditingRecipeId(r.id); setRecipeName(r.name); setRecipeYield(r.yield || 1);
                            setExtractedIngs((r.ingredients || []).map(ing => ({ ...ing, qty: ing.qty !== undefined ? ing.qty : 100, unit: ing.unit || 'g', weightInGrams: ing.weightInGrams || 100 })));
                            window.scrollTo({ top: 0, behavior: 'smooth' });
                         }} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl active:scale-95 transition-transform"><Edit2 size={18} /></button>
-                        <button onClick={() => setCustomRecipes(p => p.filter(x => x.id !== r.id))} className="p-2 text-rose-400 bg-rose-50 hover:bg-rose-100 rounded-xl active:scale-95 transition-transform"><Trash2 size={18}/></button>
+                        <button onClick={() => setCustomRecipes(pr => pr.filter(x => x.id !== r.id))} className="p-2 text-rose-400 bg-rose-50 hover:bg-rose-100 rounded-xl active:scale-95 transition-transform"><Trash2 size={18}/></button>
                       </div>
                     </div>
                     <button onClick={() => addFoodToDiary(r, 1, 'pz')} className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 text-white py-3 rounded-xl font-bold text-sm shadow-sm hover:shadow-md active:scale-95 transition-all">➕ Aggiungi al Diario (1 pz)</button>
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>
@@ -1253,7 +1318,7 @@ export default function MacroTracker() {
 
       </main>
 
-      {/* MODALE MEAL BUILDER (SAFE) */}
+      {}
       {isMealModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-md space-y-5 shadow-2xl">
