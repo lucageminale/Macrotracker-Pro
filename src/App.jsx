@@ -1,21 +1,34 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   Search, Plus, Trash2, Calendar, Droplet, Flame, Save, RefreshCw, 
-  ChevronDown, Check, X, Edit2, Download, Upload, BarChart2, User, BookOpen, Menu, Camera, Copy, Activity, Target
+  ChevronDown, Check, X, Edit2, Download, Upload, BarChart2, User, BookOpen, Menu, Camera, Copy, Activity, Target, Database
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 
-// --- CONFIGURAZIONE FIREBASE ---
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// --- CONFIGURAZIONE FIREBASE CORAZZATA (ANTI-CRASH) ---
+let app, auth, db;
+try {
+  // Se hai le tue chiavi di Firebase, puoi incollarle all'interno di queste parentesi graffe:
+  const hardcodedConfig = {}; 
+  
+  const envConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+  const finalConfig = Object.keys(hardcodedConfig).length > 0 ? hardcodedConfig : envConfig;
+
+  if (Object.keys(finalConfig).length > 0 && finalConfig.apiKey) {
+    app = initializeApp(finalConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  }
+} catch (error) {
+  console.error("Firebase bypassato: Modalità Locale attivata.", error);
+}
+
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
+// --- DATABASE LOCALE ---
 const basicFoodsDB = [
-  // Ingredienti Poké
   { name: "Riso bianco cotto (Sushi)", calories: 130, protein: 2.7, carbs: 28.0, fat: 0.3 },
   { name: "Riso nero cotto", calories: 140, protein: 3.0, carbs: 30.0, fat: 1.0 },
   { name: "Salmone crudo", calories: 208, protein: 20.0, carbs: 0.0, fat: 13.0 },
@@ -24,7 +37,6 @@ const basicFoodsDB = [
   { name: "Edamame sgusciati", calories: 122, protein: 11.0, carbs: 10.0, fat: 5.0 },
   { name: "Salsa agrodolce piccante", calories: 190, protein: 0.5, carbs: 45.0, fat: 0.2 },
   { name: "Salsa di soia", calories: 53, protein: 8.0, carbs: 5.0, fat: 0.0 },
-  // Alimenti Base
   { name: "Philadelphia proteica", calories: 87, protein: 11.0, carbs: 4.9, fat: 2.5, hasPieces: true, pieceWeight: 175 },
   { name: "Yogurt greco 0%", calories: 57, protein: 10.0, carbs: 4.0, fat: 0.0 },
   { name: "Albume d'uovo", calories: 52, protein: 11.0, carbs: 0.7, fat: 0.2 },
@@ -77,9 +89,13 @@ export default function MacroTracker() {
   const [syncStatus, setSyncStatus] = useState('loading');
   const [toastMessage, setToastMessage] = useState('');
 
-  // --- STATO OFFLINE-FIRST ---
+  // --- STATO OFFLINE-FIRST CORAZZATO ---
   const loadLocal = (key, fallback) => {
-    try { const item = localStorage.getItem(`mt_${key}`); return item ? JSON.parse(item) : fallback; } 
+    try { 
+      const item = localStorage.getItem(`mt_${key}`); 
+      const parsed = item ? JSON.parse(item) : fallback;
+      return parsed !== null && parsed !== undefined ? parsed : fallback;
+    } 
     catch(e) { return fallback; }
   };
 
@@ -104,7 +120,7 @@ export default function MacroTracker() {
   const [barcodeQuery, setBarcodeQuery] = useState('');
 
   const [newFood, setNewFood] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', isPackage: false, packageWeight: '', totalPieces: '' });
-  const [editingFoodId, setEditingFoodId] = useState(null); // Nuovo stato per editare cibo custom
+  const [editingFoodId, setEditingFoodId] = useState(null);
 
   const [recipeText, setRecipeText] = useState('');
   const [extractedIngs, setExtractedIngs] = useState([]);
@@ -148,63 +164,55 @@ export default function MacroTracker() {
     }
   };
 
+  // Autenticazione protetta per evitare crash se manca Firebase
   useEffect(() => {
+    if (!auth) {
+      setSyncStatus('local_only');
+      return;
+    }
     const initAuth = async () => {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
         else await signInAnonymously(auth);
-      } catch (err) {}
+      } catch (err) {
+        setSyncStatus('local_only');
+      }
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (usr) => {
+      setUser(usr);
+    });
     return () => unsubscribe();
   }, []);
 
+  // Salvataggio ibrido: sempre locale, cloud solo se disponibile
   useEffect(() => {
-    if (!user) return;
-    const loadData = async () => {
-      setSyncStatus('loading');
-      try {
-        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'user_data', 'macrotracker_v3');
-        const docSnap = await getDoc(docRef);
-        
-        if (docSnap.exists()) {
-          const parsed = docSnap.data();
-          let loadedDiary = parsed.diary || [];
-          if (!Array.isArray(loadedDiary)) loadedDiary = Object.entries(loadedDiary).flatMap(([date, items]) => Array.isArray(items) ? items.map(item => ({ ...item, date })) : []);
-          setDiary(loadedDiary || []); setCustomFoods(parsed.customFoods || []); setCustomRecipes(parsed.customRecipes || []);
-          setCustomMeals(parsed.customMeals || []); setRecentFoods(parsed.recentFoods || []);
-          setActiveCalMap(parsed.activeCalMap || {}); setWaterMap(parsed.waterMap || {}); setWeightMap(parsed.weightMap || {});
-          
-          setProfile(p => ({
-              ...p,
-              ...(parsed.profile || {}),
-              goalMode: parsed.profile?.goalMode || 'manual',
-              smartGoal: parsed.profile?.smartGoal || 'recomp',
-              jobActivity: parsed.profile?.jobActivity || 1.1,
-              workoutActivity: parsed.profile?.workoutActivity || 0.2
-          }));
-        }
-        setSyncStatus('synced');
-      } catch (err) { setSyncStatus('error'); }
+    if (syncStatus === 'loading') return;
+    const isCloudAvailable = user && db && auth;
+    
+    setSyncStatus(isCloudAvailable ? 'saving' : 'local_only');
+    
+    const dataToSave = { 
+      diary: diary || [], customFoods: customFoods || [], customRecipes: customRecipes || [], 
+      customMeals: customMeals || [], recentFoods: recentFoods || [], 
+      activeCalMap: activeCalMap || {}, waterMap: waterMap || {}, weightMap: weightMap || {}, 
+      profile: profile || {}
     };
-    loadData();
-  }, [user]);
-
-  useEffect(() => {
-    if (!user || syncStatus === 'loading') return;
-    setSyncStatus('saving');
-    const dataToSave = { diary, customFoods, customRecipes, customMeals, recentFoods, activeCalMap, waterMap, weightMap, profile };
+    
+    // Backup Locale Immediato Garantito
     Object.keys(dataToSave).forEach(key => localStorage.setItem(`mt_${key}`, JSON.stringify(dataToSave[key])));
 
-    const timer = setTimeout(async () => {
-      try {
-        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'user_data', 'macrotracker_v3');
-        await setDoc(docRef, dataToSave);
-        setSyncStatus('synced');
-      } catch (err) { setSyncStatus('error'); }
-    }, 1500);
-    return () => clearTimeout(timer);
+    // Se Firebase esiste, salva nel Cloud
+    if (isCloudAvailable) {
+      const timer = setTimeout(async () => {
+        try {
+          const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'user_data', 'macrotracker_v3');
+          await setDoc(docRef, dataToSave);
+          setSyncStatus('synced');
+        } catch (err) { setSyncStatus('error'); }
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
   }, [diary, customFoods, customRecipes, customMeals, recentFoods, activeCalMap, waterMap, weightMap, profile, user]);
 
   useEffect(() => {
@@ -223,14 +231,18 @@ export default function MacroTracker() {
 
   const bmr = getBMR();
   const dailyDiary = useMemo(() => (diary || []).filter(d => d.date === selectedDate), [diary, selectedDate]);
-  const dailyActiveCals = Number(activeCalMap[selectedDate]) || 0;
-  const dailyWater = Number(waterMap[selectedDate]) || 0;
-  const todayWeight = weightMap[selectedDate] !== undefined ? weightMap[selectedDate] : (profile?.weight || '');
+  const safeActiveCalMap = activeCalMap || {};
+  const safeWaterMap = waterMap || {};
+  const safeWeightMap = weightMap || {};
+
+  const dailyActiveCals = Number(safeActiveCalMap[selectedDate]) || 0;
+  const dailyWater = Number(safeWaterMap[selectedDate]) || 0;
+  const todayWeight = safeWeightMap[selectedDate] !== undefined ? safeWeightMap[selectedDate] : (profile?.weight || '');
   
   const suggestedWater = profile?.weight ? Math.round(profile.weight * 30) : 2100;
   const dailyWaterTarget = profile?.customWaterTarget ? Number(profile.customWaterTarget) : suggestedWater;
 
-  const isActiveDay = dailyDiary.length > 0 || dailyActiveCals > 0 || weightMap[selectedDate] !== undefined;
+  const isActiveDay = dailyDiary.length > 0 || dailyActiveCals > 0 || safeWeightMap[selectedDate] !== undefined;
 
   const dailyTotals = useMemo(() => {
     if (!isActiveDay) return { cal: 0, pro: 0, car: 0, fat: 0, balance: 0 };
@@ -244,14 +256,14 @@ export default function MacroTracker() {
   const historyData = useMemo(() => {
     const daysMap = {};
     (diary || []).forEach(item => {
-      if (!daysMap[item.date]) daysMap[item.date] = { date: item.date, intake: 0, active: 0, weight: weightMap[item.date] };
+      if (!daysMap[item.date]) daysMap[item.date] = { date: item.date, intake: 0, active: 0, weight: safeWeightMap[item.date] };
       daysMap[item.date].intake += (item.calories || 0);
     });
-    Object.entries(activeCalMap || {}).forEach(([date, active]) => {
-      if (!daysMap[date]) daysMap[date] = { date, intake: 0, active: 0, weight: weightMap[date] };
+    Object.entries(safeActiveCalMap).forEach(([date, active]) => {
+      if (!daysMap[date]) daysMap[date] = { date, intake: 0, active: 0, weight: safeWeightMap[date] };
       daysMap[date].active = Number(active) || 0;
     });
-    Object.entries(weightMap || {}).forEach(([date, weight]) => {
+    Object.entries(safeWeightMap).forEach(([date, weight]) => {
         if (!daysMap[date]) daysMap[date] = { date, intake: 0, active: 0, weight: weight };
     });
     
@@ -259,19 +271,19 @@ export default function MacroTracker() {
       const burn = bmr + day.active;
       return { ...day, burn, balance: day.intake - burn };
     });
-  }, [diary, activeCalMap, weightMap, bmr]);
+  }, [diary, safeActiveCalMap, safeWeightMap, bmr]);
 
   const showWeightReminder = useMemo(() => {
-     const dates = Object.keys(weightMap).sort();
+     const dates = Object.keys(safeWeightMap).sort();
      const lastDateStr = dates.pop(); 
      if (!lastDateStr) return true; 
      const diffTime = Math.abs(new Date(todayStr) - new Date(lastDateStr));
      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
      return diffDays > 15;
-  }, [weightMap, todayStr]);
+  }, [safeWeightMap, todayStr]);
 
   const applySmartGoals = () => {
-      if (!profile.weight || !profile.height || !profile.age) return showToast("Compila i dati biometrici!");
+      if (!profile.weight || !profile.height || !profile.age) return showToast("Compila i dati biometrici nel profilo!");
       
       const multiplier = (parseFloat(profile.jobActivity) || 1.1) + (parseFloat(profile.workoutActivity) || 0);
       const tdee = bmr * multiplier;
@@ -307,7 +319,7 @@ export default function MacroTracker() {
     if (yesterdayItems.length === 0) return showToast("Nessun alimento da copiare da ieri.");
     const newItems = yesterdayItems.map(item => ({ ...item, diaryId: generateId('copy'), date: selectedDate }));
     setDiary(prev => [...(prev || []), ...newItems]);
-    if (waterMap[yesterdayStr]) setWaterMap(p => ({...p, [selectedDate]: waterMap[yesterdayStr]}));
+    if (safeWaterMap[yesterdayStr]) setWaterMap(p => ({...p, [selectedDate]: safeWaterMap[yesterdayStr]}));
     showToast(`Copiati ${newItems.length} elementi da ieri!`);
   };
 
@@ -329,7 +341,7 @@ export default function MacroTracker() {
   };
 
   const addMealToDiary = (meal) => {
-    // Inject all items of the meal directly into the diary seamlessly
+    // BUG FIX: Creiamo array completo e facciamo un solo push nello stato per non sovrascrivere
     const newItems = (meal.items || []).map((item, idx) => {
         const qty = parseFloat(item.displayQty) || 100;
         let factor = qty / 100;
@@ -492,8 +504,9 @@ export default function MacroTracker() {
           <h1 className="text-xl font-bold tracking-tight">MacroTracker Pro</h1>
         </div>
         <div className="flex items-center space-x-2 text-sm">
-          {syncStatus === 'saving' && <span className="text-orange-400 font-semibold">Sync...</span>}
-          {syncStatus === 'synced' && <span className="text-emerald-400 flex items-center"><Check size={16}/></span>}
+          {syncStatus === 'saving' && <span className="text-orange-400 font-semibold flex items-center"><RefreshCw size={14} className="mr-1 animate-spin"/> Sync...</span>}
+          {syncStatus === 'synced' && <span className="text-emerald-400 flex items-center"><Check size={16} className="mr-1"/> Cloud</span>}
+          {syncStatus === 'local_only' && <span className="text-amber-400 flex items-center"><Database size={14} className="mr-1"/> Locale</span>}
         </div>
       </header>
 
@@ -530,7 +543,7 @@ export default function MacroTracker() {
 
       <main className="p-4 max-w-3xl mx-auto space-y-6">
         
-        {}
+        {/* === SCHEDA DIARIO === */}
         {activeTab === 'diario' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             
@@ -602,14 +615,14 @@ export default function MacroTracker() {
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white p-4 rounded-2xl border shadow-sm flex flex-col items-center justify-center text-center">
                 <div className="flex items-center space-x-1.5 mb-2"><Flame className="text-orange-500" size={18} /><p className="text-xs font-bold text-slate-500 uppercase">Cal. Attive</p></div>
-                <input type="number" value={activeCalMap[selectedDate] !== undefined ? activeCalMap[selectedDate] : ''} onChange={e => setActiveCalMap(p => ({...p, [selectedDate]: e.target.value === '' ? '' : parseInt(e.target.value)}))} placeholder="0" className="w-full bg-slate-50 p-2 rounded-xl text-center font-bold text-lg outline-none" />
+                <input type="number" value={safeActiveCalMap[selectedDate] !== undefined ? safeActiveCalMap[selectedDate] : ''} onChange={e => setActiveCalMap(p => ({...p, [selectedDate]: e.target.value === '' ? '' : parseInt(e.target.value)}))} placeholder="0" className="w-full bg-slate-50 p-2 rounded-xl text-center font-bold text-lg outline-none" />
               </div>
               <div className="bg-white p-4 rounded-2xl border shadow-sm flex flex-col items-center justify-center text-center">
                 <div className="flex items-center space-x-1.5 mb-2"><Activity className="text-indigo-500" size={18} /><p className="text-xs font-bold text-slate-500 uppercase">Peso Odierno</p></div>
                 <div className="flex items-center space-x-1">
                    <input type="number" value={todayWeight} onChange={e => {
                        const v = e.target.value === '' ? '' : parseFloat(e.target.value);
-                       setWeightMap(p => ({...p, [selectedDate]: v}));
+                       setWeightMap(p => ({...(p || {}), [selectedDate]: v}));
                        if(new Date(selectedDate) >= new Date(todayStr)) setProfile(p => ({...p, weight: v}));
                    }} placeholder="kg" className="w-20 bg-slate-50 p-2 rounded-xl text-center font-bold text-lg outline-none" />
                    <span className="text-sm font-bold text-slate-400">kg</span>
@@ -626,9 +639,9 @@ export default function MacroTracker() {
                    <div style={{ width: `${Math.min((dailyWater / dailyWaterTarget) * 100, 100)}%` }} className={`h-full transition-all duration-500 ${dailyWater >= dailyWaterTarget ? 'bg-emerald-400' : 'bg-cyan-400'}`}></div>
                 </div>
                 <div className="flex space-x-2">
-                   <button onClick={() => setWaterMap(p => ({...p, [selectedDate]: (Number(p[selectedDate])||0) + 250}))} className="flex-1 bg-cyan-50 text-cyan-700 py-2 rounded-xl font-bold text-sm shadow-sm active:scale-95 transition-transform">+ 250ml</button>
-                   <button onClick={() => setWaterMap(p => ({...p, [selectedDate]: (Number(p[selectedDate])||0) + 500}))} className="flex-1 bg-cyan-50 text-cyan-700 py-2 rounded-xl font-bold text-sm shadow-sm active:scale-95 transition-transform">+ 500ml</button>
-                   <button onClick={() => setWaterMap(p => ({...p, [selectedDate]: 0}))} className="px-3 bg-slate-100 text-slate-500 rounded-xl active:scale-95 transition-transform"><Trash2 size={16}/></button>
+                   <button onClick={() => setWaterMap(p => ({...(p || {}), [selectedDate]: (Number((p || {})[selectedDate])||0) + 250}))} className="flex-1 bg-cyan-50 text-cyan-700 py-2 rounded-xl font-bold text-sm shadow-sm hover:shadow-md active:scale-95 transition-all">+ 250ml</button>
+                   <button onClick={() => setWaterMap(p => ({...(p || {}), [selectedDate]: (Number((p || {})[selectedDate])||0) + 500}))} className="flex-1 bg-cyan-50 text-cyan-700 py-2 rounded-xl font-bold text-sm shadow-sm hover:shadow-md active:scale-95 transition-all">+ 500ml</button>
+                   <button onClick={() => setWaterMap(p => ({...(p || {}), [selectedDate]: 0}))} className="px-3 bg-slate-100 text-slate-500 rounded-xl active:scale-95 transition-transform"><Trash2 size={16}/></button>
                 </div>
              </div>
 
@@ -701,7 +714,7 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {}
+        {/* === SCHEDA STORICO === */}
         {activeTab === 'storico' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm flex items-center justify-between">
@@ -753,6 +766,7 @@ export default function MacroTracker() {
           </div>
         )}
 
+        {/* === SCHEDA PROFILO === */}
         {activeTab === 'profilo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
@@ -777,7 +791,7 @@ export default function MacroTracker() {
                   <input type="number" value={profile.weight !== undefined ? profile.weight : ''} onChange={e => {
                      const v = e.target.value === '' ? '' : parseFloat(e.target.value);
                      setProfile({ ...profile, weight: v }); 
-                     setWeightMap(p => ({...p, [todayStr]: v})); 
+                     setWeightMap(p => ({...(p || {}), [todayStr]: v})); 
                   }} className="w-full mt-1 bg-slate-50 border p-3 rounded-xl outline-none font-bold" />
                 </div>
                 <div>
@@ -865,7 +879,7 @@ export default function MacroTracker() {
               <p className="text-sm text-slate-500 mb-4">Esporta un salvataggio o ripristina i dati.</p>
               <div className="grid grid-cols-2 gap-4">
                 <button onClick={() => {
-                  const data = { diary, customFoods, customRecipes, customMeals, recentFoods, activeCalMap, waterMap, weightMap, profile, exportDate: new Date().toISOString() };
+                  const data = { diary, customFoods, customRecipes, customMeals, recentFoods, activeCalMap: safeActiveCalMap, waterMap: safeWaterMap, weightMap: safeWeightMap, profile, exportDate: new Date().toISOString() };
                   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement('a'); a.href = url; a.download = `macrotracker_backup_${new Date().toISOString().split('T')[0]}.json`;
@@ -896,7 +910,7 @@ export default function MacroTracker() {
           </div>
         )}
 
-        {}
+        {/* === SCHEDA IDRATAZIONE === */}
         {activeTab === 'idratazione' && (
           <div className="space-y-6 animate-in fade-in duration-300">
              <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-6">
@@ -922,6 +936,7 @@ export default function MacroTracker() {
           </div>
         )}
         
+        {/* === SCHEDA CATALOGO === */}
         {activeTab === 'catalogo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="space-y-3">
@@ -977,7 +992,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {}
+        {/* === SCHEDA CREA CIBO === */}
         {activeTab === 'crea_cibo' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
@@ -1017,7 +1032,7 @@ export default function MacroTracker() {
                      // Aggiornamento a cascata sui pasti usuali
                      setCustomMeals(prev => (prev || []).map(m => {
                          let changed = false;
-                         const newItems = m.items.map(it => {
+                         const newItems = (m.items || []).map(it => {
                              if (it.name.toLowerCase() === foodData.name.toLowerCase()) { changed = true; return { ...it, name: foodData.name, baseCalories: foodData.calories, baseProtein: foodData.protein, baseCarbs: foodData.carbs, baseFat: foodData.fat, hasPieces: foodData.hasPieces, pieceWeight: foodData.pieceWeight }; }
                              return it;
                          });
@@ -1060,7 +1075,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {}
+        {/* === SCHEDA PASTI === */}
         {activeTab === 'pasti' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm space-y-4">
@@ -1068,7 +1083,7 @@ export default function MacroTracker() {
               <input type="text" placeholder="Nome del Pasto (es. Poké Grande)" value={mealBuilder.name} onChange={e => setMealBuilder({ ...mealBuilder, name: e.target.value })} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold text-slate-700 shadow-sm" />
               
               <div className="space-y-3 mt-4">
-                {mealBuilder.items.map((item, idx) => (
+                {(mealBuilder.items || []).map((item, idx) => (
                   <div key={idx} className="bg-slate-50 p-3 rounded-xl border flex justify-between items-center shadow-sm">
                     <div className="flex-1">
                       <p className="font-bold text-slate-800">{item.name}</p>
@@ -1077,12 +1092,12 @@ export default function MacroTracker() {
                           type="number" value={item.displayQty !== undefined ? item.displayQty : ''} 
                           onChange={(e) => {
                             const raw = e.target.value;
-                            setMealBuilder(prev => ({ ...prev, items: prev.items.map((it, i) => i === idx ? { ...it, displayQty: raw } : it) }));
+                            setMealBuilder(prev => ({ ...prev, items: (prev.items || []).map((it, i) => i === idx ? { ...it, displayQty: raw } : it) }));
                           }}
                           className="w-16 p-1.5 rounded-lg border text-center font-bold outline-none bg-white shadow-sm"
                         />
                         {(item.hasPieces || item.unit === 'pz') ? (
-                          <select value={item.unit} onChange={(e) => setMealBuilder(prev => ({ ...prev, items: prev.items.map((it, i) => i === idx ? { ...it, unit: e.target.value } : it) }))} className="p-1.5 rounded-lg border outline-none font-medium bg-white shadow-sm">
+                          <select value={item.unit} onChange={(e) => setMealBuilder(prev => ({ ...prev, items: (prev.items || []).map((it, i) => i === idx ? { ...it, unit: e.target.value } : it) }))} className="p-1.5 rounded-lg border outline-none font-medium bg-white shadow-sm">
                             <option value="g">g</option><option value="pz">pz</option>
                           </select>
                         ) : <span>g</span>}
@@ -1098,7 +1113,7 @@ export default function MacroTracker() {
                         })()}
                       </div>
                     </div>
-                    <button onClick={() => setMealBuilder(p => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))} className="text-rose-400 p-2 active:scale-95 transition-transform"><Trash2 size={20}/></button>
+                    <button onClick={() => setMealBuilder(p => ({ ...p, items: (p.items || []).filter((_, i) => i !== idx) }))} className="text-rose-400 p-2 active:scale-95 transition-transform"><Trash2 size={20}/></button>
                   </div>
                 ))}
               </div>
@@ -1119,7 +1134,7 @@ export default function MacroTracker() {
                         </div>
                         <button type="button" onClick={() => {
                           const dQ = food.hasPieces ? 1 : 100; const dU = food.hasPieces ? 'pz' : 'g';
-                          setMealBuilder(p => ({ ...p, items: [...p.items, { id: generateId('mi'), name: food.name, displayQty: dQ, unit: dU, hasPieces: food.hasPieces || false, pieceWeight: food.pieceWeight || 100, baseCalories: food.calories || 0, baseProtein: food.protein || 0, baseCarbs: food.carbs || 0, baseFat: food.fat || 0 }]}));
+                          setMealBuilder(p => ({ ...p, items: [...(p.items || []), { id: generateId('mi'), name: food.name, displayQty: dQ, unit: dU, hasPieces: food.hasPieces || false, pieceWeight: food.pieceWeight || 100, baseCalories: food.calories || 0, baseProtein: food.protein || 0, baseCarbs: food.carbs || 0, baseFat: food.fat || 0 }]}));
                           setMealSearchQuery(''); setMealSearchResults([]); showToast(`Aggiunto: ${food.name}`);
                         }} className="text-xs bg-gradient-to-r from-indigo-600 to-indigo-500 text-white font-bold px-3 py-2 rounded-lg shadow-sm hover:shadow-md active:scale-95 transition-all flex items-center"><Plus size={14} className="mr-1" /> Aggiungi</button>
                       </div>
@@ -1130,9 +1145,9 @@ export default function MacroTracker() {
 
               <div className="flex space-x-2 pt-2">
                 <button onClick={() => {
-                  if (!mealBuilder.name || mealBuilder.items.length === 0) return showToast("Nome e ingredienti necessari");
-                  if (editingMealId) { setCustomMeals(p => p.map(m => m.id === editingMealId ? { ...mealBuilder, id: editingMealId } : m)); setEditingMealId(null); } 
-                  else { setCustomMeals(p => [...p, { ...mealBuilder, id: generateId('meal') }]); }
+                  if (!mealBuilder.name || !mealBuilder.items || mealBuilder.items.length === 0) return showToast("Nome e ingredienti necessari");
+                  if (editingMealId) { setCustomMeals(p => (p || []).map(m => m.id === editingMealId ? { ...mealBuilder, id: editingMealId } : m)); setEditingMealId(null); } 
+                  else { setCustomMeals(p => [...(p || []), { ...mealBuilder, id: generateId('meal') }]); }
                   setMealBuilder({ name: '', items: [] }); setMealSearchQuery(''); setMealSearchResults([]); showToast("Pasto Salvato!");
                 }} className="flex-1 bg-gradient-to-r from-indigo-600 to-indigo-500 text-white font-bold py-3.5 rounded-xl shadow-md hover:shadow-lg active:scale-95 transition-all">{editingMealId ? '💾 Aggiorna Pasto' : '💾 Salva Pasto'}</button>
                 {editingMealId && <button onClick={() => { setEditingMealId(null); setMealBuilder({ name: '', items: [] }); setMealSearchQuery(''); setMealSearchResults([]); }} className="px-4 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl shadow-sm hover:bg-slate-50 active:scale-95 transition-all">Annulla</button>}
@@ -1143,13 +1158,13 @@ export default function MacroTracker() {
               <div className="space-y-4">
                 <h3 className="font-bold text-lg">I Tuoi Pasti Salvati</h3>
                 {customMeals.map(meal => {
-                  const mCals = meal.items.reduce((sum, item) => {
+                  const mCals = (meal.items || []).reduce((sum, item) => {
                     const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100;
                     return sum + Math.round((item.baseCalories || 0) * f);
                   }, 0);
-                  const mPro = meal.items.reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseProtein || 0) * f); }, 0);
-                  const mCar = meal.items.reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseCarbs || 0) * f); }, 0);
-                  const mFat = meal.items.reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseFat || 0) * f); }, 0);
+                  const mPro = (meal.items || []).reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseProtein || 0) * f); }, 0);
+                  const mCar = (meal.items || []).reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseCarbs || 0) * f); }, 0);
+                  const mFat = (meal.items || []).reduce((sum, item) => { const q = Number(item.displayQty) || 0; let f = q / 100; if (item.unit === 'pz') f = ((item.pieceWeight || 100) * q) / 100; return sum + ((item.baseFat || 0) * f); }, 0);
 
                   return (
                   <div key={meal.id} className="bg-white p-4 rounded-3xl border shadow-sm">
@@ -1157,12 +1172,12 @@ export default function MacroTracker() {
                       <p className="font-bold text-lg text-slate-800">{meal.name}</p>
                       <div className="flex space-x-1">
                         <button onClick={() => { setEditingMealId(meal.id); setMealBuilder(meal); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="text-slate-400 hover:text-indigo-600 p-2 bg-slate-50 rounded-xl active:scale-95 transition-transform"><Edit2 size={18}/></button>
-                        <button onClick={() => setCustomMeals(p => p.filter(m => m.id !== meal.id))} className="text-rose-400 p-2 bg-rose-50 rounded-xl hover:bg-rose-100 active:scale-95 transition-transform"><Trash2 size={18}/></button>
+                        <button onClick={() => setCustomMeals(p => (p || []).filter(m => m.id !== meal.id))} className="text-rose-400 p-2 bg-rose-50 rounded-xl hover:bg-rose-100 active:scale-95 transition-transform"><Trash2 size={18}/></button>
                       </div>
                     </div>
                     <p className="text-sm font-bold text-indigo-600 mb-3">{mCals} kcal <span className="text-xs font-medium text-slate-500">(P: {mPro.toFixed(1)} C: {mCar.toFixed(1)} G: {mFat.toFixed(1)})</span></p>
 
-                    <div className="space-y-1 mb-4 bg-slate-50 p-3 rounded-xl border border-slate-100">{meal.items.map((item, idx) => <p key={idx} className="text-sm text-slate-600 font-medium">• {item.displayQty}{item.unit} {item.name}</p>)}</div>
+                    <div className="space-y-1 mb-4 bg-slate-50 p-3 rounded-xl border border-slate-100">{(meal.items || []).map((item, idx) => <p key={idx} className="text-sm text-slate-600 font-medium">• {item.displayQty}{item.unit} {item.name}</p>)}</div>
                     <button onClick={() => addMealToDiary(meal)} className="w-full bg-white border border-indigo-200 text-indigo-700 py-3 rounded-xl font-bold shadow-sm hover:border-indigo-300 hover:bg-indigo-50 active:scale-95 transition-all">Inietta Intero Pasto nel Diario</button>
                   </div>
                 )})}
@@ -1171,7 +1186,7 @@ export default function MacroTracker() {
           </div>
         )}
         
-        {}
+        {/* === SCHEDA RICETTE === */}
         {activeTab === 'ricette' && (
           <div className="space-y-6 animate-in fade-in duration-300">
             <div className="bg-white p-6 rounded-3xl border shadow-sm">
@@ -1192,7 +1207,7 @@ export default function MacroTracker() {
                   <input type="number" value={recipeYield !== undefined ? recipeYield : ''} onChange={e => setRecipeYield(e.target.value === '' ? '' : parseInt(e.target.value))} className="w-20 p-2 rounded-lg text-center font-bold outline-none shadow-sm" />
                 </div>
                 <div className="space-y-3">
-                  {extractedIngs.map(ing => {
+                  {(extractedIngs || []).map(ing => {
                     const wg = Number(ing.weightInGrams)||0; const bk = Number(ing.baseCalories)||0;
                     const bp = Number(ing.baseProtein)||0; const bc = Number(ing.baseCarbs)||0; const bf = Number(ing.baseFat)||0;
                     return (
@@ -1201,18 +1216,18 @@ export default function MacroTracker() {
                           <div className="flex items-center space-x-2">
                             <input type="number" value={ing.qty !== undefined ? ing.qty : ''} onChange={e => {
                                const rq = e.target.value; const nq = parseFloat(rq)||0;
-                               setExtractedIngs(p => p.map(i => i.id === ing.id ? { ...i, qty: rq, weightInGrams: i.unit === 'pz' ? nq*(i.pieceWeight||100) : nq } : i));
+                               setExtractedIngs(p => (p || []).map(i => i.id === ing.id ? { ...i, qty: rq, weightInGrams: i.unit === 'pz' ? nq*(i.pieceWeight||100) : nq } : i));
                             }} className="w-16 bg-slate-100 p-1.5 rounded-lg font-bold text-center outline-none" />
                             <span className="font-bold text-slate-700">{ing.unit}</span>
                             <span className="font-bold text-slate-800 ml-2">{ing.name}</span>
                           </div>
-                          <button onClick={() => setExtractedIngs(p => p.filter(i => i.id !== ing.id))} className="text-rose-400 bg-rose-50 p-1.5 rounded-full active:scale-95 transition-transform"><X size={16}/></button>
+                          <button onClick={() => setExtractedIngs(p => (p || []).filter(i => i.id !== ing.id))} className="text-rose-400 bg-rose-50 p-1.5 rounded-full active:scale-95 transition-transform"><X size={16}/></button>
                         </div>
                         <div className="grid grid-cols-4 gap-2 text-center mt-2">
                           <div><p className="text-[10px] uppercase font-bold text-slate-400">kcal</p><input type="number" value={ing.customKcalInput !== undefined ? ing.customKcalInput : Math.round((bk*wg)/100)} onChange={e => {
                               const rk = e.target.value;
-                              if (rk === '') setExtractedIngs(p => p.map(i => i.id === ing.id ? { ...i, customKcalInput: '' } : i));
-                              else setExtractedIngs(p => p.map(i => i.id === ing.id ? { ...i, baseCalories: wg > 0 ? ((parseFloat(rk)||0)/wg)*100 : 0, customKcalInput: rk } : i));
+                              if (rk === '') setExtractedIngs(p => (p || []).map(i => i.id === ing.id ? { ...i, customKcalInput: '' } : i));
+                              else setExtractedIngs(p => (p || []).map(i => i.id === ing.id ? { ...i, baseCalories: wg > 0 ? ((parseFloat(rk)||0)/wg)*100 : 0, customKcalInput: rk } : i));
                           }} className="w-full bg-slate-50 font-bold text-indigo-600 rounded text-center p-1 outline-none border border-slate-100" /></div>
                           <div><p className="text-[10px] uppercase font-bold text-slate-400">Pro (g)</p><p className="bg-slate-50 rounded p-1 font-medium border border-slate-100">{(bp*wg/100).toFixed(1)}</p></div>
                           <div><p className="text-[10px] uppercase font-bold text-slate-400">Car (g)</p><p className="bg-slate-50 rounded p-1 font-medium border border-slate-100">{(bc*wg/100).toFixed(1)}</p></div>
@@ -1237,7 +1252,7 @@ export default function MacroTracker() {
                           <span className="font-semibold text-slate-700">{food.name}</span>
                           <button onClick={() => {
                              const q = Number(manualAddQty) || 100; let w = q; if (manualAddUnit === 'pz') w = q * (food.pieceWeight || 100);
-                             setExtractedIngs(p => [...p, { id: generateId('ing'), name: food.name, qty: manualAddQty || 100, unit: manualAddUnit, baseCalories: food.calories || 0, baseProtein: food.protein || 0, baseCarbs: food.carbs || 0, baseFat: food.fat || 0, weightInGrams: w, pieceWeight: food.pieceWeight || 100 }]);
+                             setExtractedIngs(p => [...(p || []), { id: generateId('ing'), name: food.name, qty: manualAddQty || 100, unit: manualAddUnit, baseCalories: food.calories || 0, baseProtein: food.protein || 0, baseCarbs: food.carbs || 0, baseFat: food.fat || 0, weightInGrams: w, pieceWeight: food.pieceWeight || 100 }]);
                              setManualSearchQuery(''); setManualSearchResults([]); setManualAddQty('');
                           }} className="bg-gradient-to-r from-indigo-600 to-indigo-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm hover:shadow-md active:scale-95 transition-all">+ Aggiungi</button>
                         </div>
@@ -1269,7 +1284,7 @@ export default function MacroTracker() {
                       // Aggiornamento a cascata sui pasti usuali
                       setCustomMeals(prev => (prev || []).map(m => {
                           let changed = false;
-                          const newItems = m.items.map(it => {
+                          const newItems = (m.items || []).map(it => {
                               if (it.name.toLowerCase() === recipeData.name.toLowerCase()) { changed = true; return { ...it, name: recipeData.name, baseCalories: recipeData.calories, baseProtein: recipeData.protein, baseCarbs: recipeData.carbs, baseFat: recipeData.fat, hasPieces: recipeData.hasPieces, pieceWeight: recipeData.pieceWeight }; }
                               return it;
                           });
@@ -1305,7 +1320,7 @@ export default function MacroTracker() {
                            setExtractedIngs((r.ingredients || []).map(ing => ({ ...ing, qty: ing.qty !== undefined ? ing.qty : 100, unit: ing.unit || 'g', weightInGrams: ing.weightInGrams || 100 })));
                            window.scrollTo({ top: 0, behavior: 'smooth' });
                         }} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl active:scale-95 transition-transform"><Edit2 size={18} /></button>
-                        <button onClick={() => setCustomRecipes(pr => pr.filter(x => x.id !== r.id))} className="p-2 text-rose-400 bg-rose-50 hover:bg-rose-100 rounded-xl active:scale-95 transition-transform"><Trash2 size={18}/></button>
+                        <button onClick={() => setCustomRecipes(pr => (pr || []).filter(x => x.id !== r.id))} className="p-2 text-rose-400 bg-rose-50 hover:bg-rose-100 rounded-xl active:scale-95 transition-transform"><Trash2 size={18}/></button>
                       </div>
                     </div>
                     <button onClick={() => addFoodToDiary(r, 1, 'pz')} className="w-full bg-gradient-to-r from-indigo-600 to-indigo-500 text-white py-3 rounded-xl font-bold text-sm shadow-sm hover:shadow-md active:scale-95 transition-all">➕ Aggiungi al Diario (1 pz)</button>
@@ -1318,7 +1333,7 @@ export default function MacroTracker() {
 
       </main>
 
-      {}
+      {/* MODALE PASTI VELOCI (INIEZIONE) */}
       {isMealModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-md space-y-5 shadow-2xl">
@@ -1345,7 +1360,7 @@ export default function MacroTracker() {
                             const items = dailyDiary.filter(d => selectedDiaryItems.includes(d.diaryId)).map(d => ({
                                 id: generateId('meal_item'), name: d.name, displayQty: d.displayQty !== undefined ? d.displayQty : 100, unit: d.unit || 'g', hasPieces: d.hasPieces || d.unit === 'pz', pieceWeight: d.pieceWeight || 100, baseCalories: d.baseCalories || 0, baseProtein: d.baseProtein || 0, baseCarbs: d.baseCarbs || 0, baseFat: d.baseFat || 0
                             }));
-                            setCustomMeals(p => p.map(m => m.id === mealModalSelectedExisting ? { ...m, items: [...m.items, ...items] } : m));
+                            setCustomMeals(p => (p || []).map(m => m.id === mealModalSelectedExisting ? { ...m, items: [...(m.items || []), ...items] } : m));
                             setSelectedDiaryItems([]); setIsMealModalOpen(false); setMealModalSelectedExisting(''); showToast("Aggiunti!");
                          }} className="bg-gradient-to-r from-indigo-600 to-indigo-500 text-white px-5 rounded-xl font-bold shadow-md hover:shadow-lg active:scale-95 transition-all">Aggiungi</button>
                       </div>
